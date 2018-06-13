@@ -102,3 +102,5 @@ if __name__ == '__main__':
   a = generate_anchors()
   print(time.time() - t)
   print(a)
+  print((a[:, 2] - a[:, 0]) / 2 + a[:, 0])
+  print((a[:, 3] - a[:, 1]) / 2 + a[:, 1])
