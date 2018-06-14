@@ -141,8 +141,7 @@ def tile_anchors(grid_height,
   """
 
   ratio_sqrts = tf.sqrt(aspect_ratios)
-  print(scales / ratio_sqrts)
-  print(base_anchor_size[0])
+
   heights = scales / ratio_sqrts * tf.constant([256],dtype=tf.float32)
   widths = scales * ratio_sqrts *  tf.constant([256],dtype=tf.float32)
 
@@ -241,4 +240,4 @@ anchors = gen.generate(feature_map_shape_list=[(1,1)])
 
 print((anchors[:,2]-anchors[:,0])/2+anchors[:,0])
 print((anchors[:,3]-anchors[:,1])/2+anchors[:,1])
-print(gen.generate(feature_map_shape_list=[(1,1)]))
+print(gen.generate(feature_map_shape_list=[(2,2)]))
