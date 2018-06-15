@@ -28,6 +28,8 @@ def get_batch(batch_size,is_shuff = True,max_detect = 50,image_size=300):
                 print(idx)
 
             img, box, lab = data_set.pull_item(idx[index])
+
+
             #img = img - 0.5
             #img = img * 2.0
             if random.randint(0,1)==1:
@@ -80,6 +82,8 @@ def get_batch_inception(batch_size,is_shuff = True,max_detect = 50,image_size=30
                 print(idx)
 
             img, box, lab = data_set.pull_item(idx[index])
+            if len(lab)==0:
+                continue
             if True:
 
                 if random.randint(0,1)==1:
@@ -91,6 +95,8 @@ def get_batch_inception(batch_size,is_shuff = True,max_detect = 50,image_size=30
 
                 img, box, lab = aug(img,box,lab)
                 img = ((img + [104, 117, 123])/255-0.5)*2.0
+
+            box = box*image_size
 
             rpn_match, rpn_box = match_anchor_gtbox.build_rpn_targets(
                 anchors=cfg.anchors,
@@ -142,9 +148,4 @@ def tt():
         img, box, lab = data_set.pull_item(s)
         print(box)
         visual.display_instances(img, box * 512)
-
-        img, box, lab = aug(img, box, lab)
-        #img = img+[104, 117, 123]
-        img = ((img + [104, 117, 123]) / 255 - 0.5) * 2.0
-        visual.display_instances(img*255, box * 512)
 

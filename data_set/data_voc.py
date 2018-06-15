@@ -10,7 +10,7 @@ if sys.version_info[0] == 2:
 else:
     import xml.etree.ElementTree as ET
 
-VOC_CLASSES = (
+VOC_CLASSES = ('back',
     'aeroplane', 'bicycle', 'bird', 'boat',
     'bottle', 'bus', 'car', 'cat', 'chair',
     'cow', 'diningtable', 'dog', 'horse',
@@ -92,7 +92,7 @@ class AugAnnotationTransform(object):
         box[:, 2] = box[:, 2] + padding[1][1]
         box[:, 3] = box[:, 3] + padding[0][1]
 
-        #box = box/self.image_size
+        box = box/self.image_size
         return image,box,label
 
 

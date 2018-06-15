@@ -17,7 +17,12 @@ class Cfg(object):
         self.total_anchors = self.feature_shape[0]*self.feature_shape[1]*9
         self.anchors = gen_anchor.generate_anchors(scales=self.anchors_scals, ratios=self.anchors_radios,
                                               shape=self.feature_shape, feature_stride=self.feature_stride)
+
         self.norm_anchors = utils.norm_boxes(self.anchors,self.image_size)
+
+        self.TRAIN_ROIS_PER_IMAGE = 200
+        self.pool_shape = 7
+        self.ROI_POSITIVE_RATIO = 0.33
         if is_train:
             self.NMS_ROIS_TRAINING = 2000
         else:

@@ -79,22 +79,22 @@ def build_rpn_targets(anchors, gt_class_ids, gt_boxes, config):
 
         # Convert coordinates to center plus width/height.
         # GT Box
-        gt_h = gt[2] - gt[0]
-        gt_w = gt[3] - gt[1]
-        gt_center_y = gt[0] + 0.5 * gt_h
-        gt_center_x = gt[1] + 0.5 * gt_w
+        gt_w = gt[2] - gt[0]
+        gt_h = gt[3] - gt[1]
+        gt_center_x = gt[0] + 0.5 * gt_h
+        gt_center_y = gt[1] + 0.5 * gt_w
         # Anchor
-        a_h = a[2] - a[0]
-        a_w = a[3] - a[1]
-        a_center_y = a[0] + 0.5 * a_h
-        a_center_x = a[1] + 0.5 * a_w
+        a_w = a[2] - a[0]
+        a_h = a[3] - a[1]
+        a_center_x = a[0] + 0.5 * a_h
+        a_center_y = a[1] + 0.5 * a_w
 
         # Compute the bbox refinement that the RPN should predict.
         rpn_bbox[ix] = [
-            (gt_center_y - a_center_y) / a_h,
             (gt_center_x - a_center_x) / a_w,
-            np.log(gt_h / a_h),
+            (gt_center_y - a_center_y) / a_h,
             np.log(gt_w / a_w),
+            np.log(gt_h / a_h),
         ]
         # Normalize
         rpn_bbox[ix] /= config.RPN_BBOX_STD_DEV
