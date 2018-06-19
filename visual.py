@@ -93,7 +93,7 @@ def display_instances_title(image, boxes,  class_ids, class_names,
     """
     # Number of instances
     N = boxes.shape[0]
-
+    class_ids = np.asarray(class_ids,np.int32)
     # If no axis is passed, create one and automatically call show()
     auto_show = False
     if not ax:
@@ -118,7 +118,7 @@ def display_instances_title(image, boxes,  class_ids, class_names,
         if not np.any(boxes[i]):
             # Skip this instance. Has no bbox. Likely lost in image cropping.
             continue
-        x1, y1, x2, y2 = boxes[i]
+        y1, x1, y2, x2 = boxes[i]
 
         if show_bbox:
             p = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=2,

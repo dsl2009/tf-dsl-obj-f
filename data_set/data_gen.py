@@ -98,6 +98,13 @@ def get_batch_inception(batch_size,is_shuff = True,max_detect = 50,image_size=30
 
             box = box*image_size
 
+            bx = np.zeros(shape=box.shape)
+            bx[:, 0] = box[:, 1]
+            bx[:, 1] = box[:, 0]
+            bx[:, 2] = box[:, 3]
+            bx[:, 3] = box[:, 2]
+            box = bx
+
             rpn_match, rpn_box = match_anchor_gtbox.build_rpn_targets(
                 anchors=cfg.anchors,
                 gt_class_ids=lab,

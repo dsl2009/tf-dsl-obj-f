@@ -36,3 +36,12 @@ def generate_anchors(scales, ratios, shape, feature_stride, anchor_stride=1):
     boxes = np.concatenate([box_centers - 0.5 * box_sizes,
                             box_centers + 0.5 * box_sizes], axis=1)
     return boxes
+
+def gen_multi_anchors(scales, ratios, shape, feature_stride, anchor_stride=1):
+    anchors = []
+    for s in range(len(scales)):
+        an = generate_anchors([scales[s]],ratios,shape[s],feature_stride[s],anchor_stride=1)
+        anchors.append(an)
+
+    return np.vstack(anchors)
+

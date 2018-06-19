@@ -3,35 +3,31 @@ import tensorflow as tf
 from tensorflow.contrib import slim
 from config.cfg import config_instace as cfg
 import utils
-from data_set.data_loader import q
+#from data_set.data_loader import q
 import cv2
 import numpy as np
-
+from nets import inception_v2
 import visual
-import time
+from loss import losses
 import glob
+import time
 #tf.enable_eager_execution()
-def model(inputs):
-    source = []
-    with tf.variable_scope('vgg_16',default_name=None, values=[inputs]) as sc:
-        end_points_collection = sc.original_name_scope + '_end_points'
-        # Collect outputs for conv2d, fully_connected and max_pool2d.
-        with slim.arg_scope([slim.conv2d,  slim.max_pool2d]):
-            net = slim.repeat(inputs, 2, slim.conv2d, 64, [3, 3], scope='conv1')
-            net = slim.max_pool2d(net, [2, 2], scope='pool1')
-            net = slim.repeat(net, 2, slim.conv2d, 128, [3, 3], scope='conv2')
-            net = slim.max_pool2d(net, [2, 2], scope='pool2')
-            net = slim.repeat(net, 3, slim.conv2d, 256, [3, 3], scope='conv3')
-            net = slim.max_pool2d(net, [2, 2], scope='pool3')
-            net = slim.repeat(net, 3, slim.conv2d, 512, [3, 3], scope='conv4')
-            net = slim.max_pool2d(net, [2, 2], scope='pool4')
-            net = slim.repeat(net, 3, slim.conv2d, 512, [3, 3], scope='conv5')
-            net = slim.max_pool2d(net, kernel_size=3,stride=1, scope='pool5')
-            #vbs = slim.get_trainable_variables()
-            vbs = None
-    return net,vbs
+def model(img):
+    with slim.arg_scope(inception_v2.inception_v2_arg_scope()):
+        logits, end_point = inception_v2.inception_v2_base(img)
 
-def rpn_graph(feature_map,anchors_per_location=9):
+        Mixed_3c = end_point['Mixed_3c']
+        Mixed_4e = end_point['Mixed_4e']
+        Mixed_5c = end_point['Mixed_5c']
+        #vbs = slim.get_trainable_variables()
+        vbs = None
+        c1 = slim.conv2d(Mixed_3c, 512, kernel_size=1, activation_fn=None)
+        c2 = slim.conv2d(Mixed_4e, 512, kernel_size=1, activation_fn=None)
+        c3 = slim.conv2d(Mixed_5c, 512, kernel_size=1, activation_fn=None)
+
+    return c1,c2,c3,vbs
+
+def rpn_graph(feature_map,anchors_per_location=3):
     shared = slim.conv2d(feature_map,512,3,activation_fn=slim.nn.relu)
     x = slim.conv2d(shared,2 * anchors_per_location,kernel_size=1,padding='VALID',activation_fn=None)
     rpn_class_logits = tf.reshape(x,shape=[tf.shape(x)[0],-1,2])
@@ -139,36 +135,158 @@ def detection_target(input_proposals, input_gt_class_ids, input_gt_boxes):
         roi_gt_boxes = tf.pad(roi_gt_boxes, [(0, N + P), (0, 0)])
         roi_gt_class_ids = tf.pad(roi_gt_class_ids, [(0, N + P)])
         deltas = tf.pad(deltas, [(0, N + P), (0, 0)])
-        print(roi_gt_class_ids)
+
         roiss.append(rois)
         roi_gt_class_idss.append(roi_gt_class_ids)
         deltass.append(deltas)
     return tf.stack(roiss,axis=0),tf.stack(roi_gt_class_idss,axis=0),tf.stack(deltass,axis=0)
 
-def fpn_classifier_graph(rois, feature_maps, image_meta,
-                         pool_size, num_classes, train_bn=True):
+def fpn_classifier_graph(rois, feature_maps):
 
-    x = PyramidROIAlign([pool_size, pool_size],
-                        name="roi_align_classifier")([rois, image_meta] + feature_maps)
+    x = utils.roi_align(rois,feature_maps,cfg)
+
+    x = slim.conv2d(x,1024,kernel_size=cfg.pool_shape,padding='VALID',activation_fn=tf.nn.relu)
+    x = slim.conv2d(x, 1024, kernel_size=1,  activation_fn=tf.nn.relu)
+    mrcnn_class_logits = slim.fully_connected(x,cfg.num_class)
+    mrcnn_probs = slim.softmax(mrcnn_class_logits)
+    x = slim.fully_connected(x,cfg.num_class*4)
+
+    mrcnn_bbox = tf.reshape(x,shape=(-1,cfg.num_class,4))
+
+    return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
+
+def predict(images,window):
+    c1, c2, c3, vbs = model(images)
+    fp = [c1, c2, c3]
+    rpn_c_l = []
+    r_p = []
+    r_b = []
+    for f in fp:
+        rpn_class_logits, rpn_probs, rpn_bbox = rpn_graph(f)
+        rpn_c_l.append(rpn_class_logits)
+        r_p.append(rpn_probs)
+        r_b.append(rpn_bbox)
+
+    rpn_class_logits = tf.concat(rpn_c_l, axis=1)
+    rpn_probs = tf.concat(r_p, axis=1)
+    rpn_bbox = tf.concat(r_b, axis=1)
+    rpn_rois = propsal(rpn_probs, rpn_bbox)
+
+    mrcnn_class_logits, mrcnn_class, mrcnn_bbox = fpn_classifier_graph(rpn_rois, fp)
+
+    detections = utils.refine_detections_graph(rpn_rois,mrcnn_class, mrcnn_bbox,window,cfg)
+    return detections
+
+
+def detect():
+
+    ig = tf.placeholder(shape=(1, 512, 512, 3), dtype=tf.float32)
+    wind = tf.placeholder(shape=(4,1),dtype=tf.float32)
+    detections = predict(images=ig,window=wind)
+    saver = tf.train.Saver()
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        saver.restore(sess, '/home/dsl/all_check/face_detect/faster-rcnn/model.ckpt-38201')
+        for ip in glob.glob('/media/dsl/20d6b919-92e1-4489-b2be-a092290668e4/VOCdevkit/VOCdevkit/VOC2012/JPEGImages/*.jpg'):
+            print(ip)
+            img = cv2.imread(ip)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            org, window, scale, padding, crop = utils.resize_image(img, min_dim=512, max_dim=512)
+            window = np.asarray(window)/cfg.image_size[0]*1.0
+            print(window)
+            window = np.reshape(window,[4,1])
+            print(window)
+
+
+            img = (org/ 255.0-0.5)*2
+            img = np.expand_dims(img, axis=0)
+            t = time.time()
+            detects = sess.run([detections],feed_dict={ig:img,wind:window})
+            print(time.time()-t)
+            arr = detects[0]
+            ix = np.where(np.sum(arr,axis=1)>0)
+            box = arr[ix]
+            boxes = box[:,0:4]
+            label = box[:,4]
+            score = box[:,5]
+            visual.display_instances_title(org, np.asarray(boxes) * 512, class_ids=label,
+                                           class_names=cfg.VOC_CLASSES, scores=score)
 
 
 
 
+
+def loss(gt_boxs, images, input_rpn_bbox, input_rpn_match, label):
+    c1, c2, c3, vbs= model(images)
+    fp = [c1, c2, c3]
+    rpn_c_l = []
+    r_p = []
+    r_b = []
+    for f in fp:
+        rpn_class_logits, rpn_probs, rpn_bbox = rpn_graph(f)
+        rpn_c_l.append(rpn_class_logits)
+        r_p.append(rpn_probs)
+        r_b.append(rpn_bbox)
+    rpn_class_logits = tf.concat(rpn_c_l, axis=1)
+    rpn_probs = tf.concat(r_p, axis=1)
+    rpn_bbox = tf.concat(r_b, axis=1)
+    rpn_rois = propsal(rpn_probs, rpn_bbox)
+    rois, target_class_ids, target_bbox = detection_target(rpn_rois, label, gt_boxs)
+    mrcnn_class_logits, mrcnn_class, mrcnn_bbox = fpn_classifier_graph(rois, fp)
+    mrcnn_class_logits = tf.squeeze(mrcnn_class_logits, axis=[1, 2])
+    rpn_class_loss = losses.rpn_class_loss_graph(input_rpn_match, rpn_class_logits)
+    rpn_bbox_loss = losses.rpn_bbox_loss_graph(input_rpn_bbox, input_rpn_match, rpn_bbox, cfg)
+    class_loss = losses.mrcnn_class_loss_graph(target_class_ids, mrcnn_class_logits)
+    bbox_loss = losses.mrcnn_bbox_loss_graph(target_bbox, target_class_ids, mrcnn_bbox)
+    tf.losses.add_loss(rpn_class_loss)
+    tf.losses.add_loss(rpn_bbox_loss)
+    tf.losses.add_loss(class_loss)
+    tf.losses.add_loss(bbox_loss)
+    total_loss = tf.losses.get_losses()
+    tf.summary.scalar(name='rpn_class_loss', tensor=rpn_class_loss)
+    tf.summary.scalar(name='rpn_bbox_loss', tensor=rpn_bbox_loss)
+    tf.summary.scalar(name='class_loss', tensor=class_loss)
+    tf.summary.scalar(name='bbox_loss', tensor=bbox_loss)
+    sum_op = tf.summary.merge_all()
+    train_tensors = tf.identity(total_loss, 'ss')
+    return train_tensors, sum_op, vbs
 
 def run():
-    images = tf.placeholder(shape=[cfg.batch_size, cfg.image_size[0], cfg.image_size[1], 3], dtype=tf.float32)
-    boxs = tf.placeholder(shape=[cfg.batch_size, 50, 4], dtype=tf.float32)
-    label = tf.placeholder(shape=[cfg.batch_size, 50], dtype=tf.int32)
-    rpn_match = tf.placeholder(
-        [cfg.batch_size, cfg.total_anchors, 1], dtype=tf.int32)
-    rpn_bbox = tf.placeholder(
-        [cfg.batch_size, cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4], dtype=tf.float32)
+    pl_images = tf.placeholder(shape=[cfg.batch_size, cfg.image_size[0], cfg.image_size[1], 3], dtype=tf.float32)
+    pl_gt_boxs = tf.placeholder(shape=[cfg.batch_size, 50, 4], dtype=tf.float32)
+    pl_label = tf.placeholder(shape=[cfg.batch_size, 50], dtype=tf.int32)
+    pl_input_rpn_match = tf.placeholder(shape=[cfg.batch_size, cfg.total_anchors, 1], dtype=tf.int32)
+    pl_input_rpn_bbox = tf.placeholder(shape=[cfg.batch_size, cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4], dtype=tf.float32)
 
-    net = model(images)
-
-    rpn_class_logits, rpn_probs, rpn_bbox = rpn_graph(net)
+    train_tensors, sum_op, vbs = loss(pl_gt_boxs, pl_images, pl_input_rpn_bbox, pl_input_rpn_match, pl_label)
 
 
+    optimizer = tf.train.MomentumOptimizer(learning_rate=0.001, momentum=0.9)
+    train_op = slim.learning.create_train_op(train_tensors, optimizer)
+
+    saver = tf.train.Saver(vbs)
+
+    def restore(sess):
+        saver.restore(sess, '/home/dsl/all_check/inception_v2.ckpt')
+
+    sv = tf.train.Supervisor(logdir='/home/dsl/all_check/face_detect/faster-rcnn', summary_op=None, init_fn=restore)
+
+    with sv.managed_session() as sess:
+        for step in range(1000000000):
+
+
+            images, boxs, label, input_rpn_match, input_rpn_bbox = q.get()
+            gt_boxs = utils.norm_boxes(boxs,shape=cfg.image_size)
+
+            feed_dict = {pl_images: images, pl_gt_boxs: gt_boxs,
+                         pl_label: label,pl_input_rpn_bbox:input_rpn_bbox,
+                         pl_input_rpn_match:input_rpn_match}
+
+            ls = sess.run(train_op, feed_dict=feed_dict)
+            if step % 10 == 0:
+                summaries = sess.run(sum_op, feed_dict=feed_dict)
+                sv.summary_computed(sess, summaries)
+                print(ls)
 
 
 
@@ -178,16 +296,49 @@ def eager_run():
     tf.enable_eager_execution()
     for s in range(10):
         images, boxs, label, input_rpn_match, input_rpn_bbox = q.get()
-
+        print(input_rpn_bbox.shape)
         gt_boxs = utils.norm_boxes(boxes=boxs,shape=cfg.image_size)
+        c1,c2,c3 = model(images)
+        fp = [c1,c2,c3]
+        rpn_c_l = []
+        r_p = []
+        r_b = []
+        for f in fp:
+            rpn_class_logits, rpn_probs, rpn_bbox = rpn_graph(f)
+            rpn_c_l.append(rpn_class_logits)
+            r_p.append(rpn_probs)
+            r_b.append(rpn_bbox)
+        rpn_class_logits = tf.concat(rpn_c_l,axis=1)
+        rpn_probs = tf.concat(r_p, axis=1)
+        rpn_bbox = tf.concat(r_b, axis=1)
 
 
-        net,vbs = model(images)
-
-        rpn_class_logits, rpn_probs, rpn_bbox = rpn_graph(net)
         rpn_rois = propsal(rpn_probs,rpn_bbox)
 
-        rois, roi_gt_class_ids, deltas = detection_target(rpn_rois,label,gt_boxs)
+        rois, target_class_ids, target_bbox = detection_target(rpn_rois,label,gt_boxs)
+
+
+
+
+        mrcnn_class_logits, mrcnn_class, mrcnn_bbox = fpn_classifier_graph(rois,fp)
+
+        mrcnn_class_logits = tf.squeeze(mrcnn_class_logits,axis=[1,2])
+
+        rpn_class_loss = losses.rpn_class_loss_graph(input_rpn_match,rpn_class_logits)
+
+        rpn_bbox_loss = losses.rpn_bbox_loss_graph(input_rpn_bbox,input_rpn_match,rpn_bbox,cfg)
+
+        class_loss = losses.mrcnn_class_loss_graph(target_class_ids,mrcnn_class_logits)
+
+
+        bbox_loss = losses.mrcnn_bbox_loss_graph(target_bbox,target_class_ids,mrcnn_bbox)
+
+def eager_val():
+    tf.enable_eager_execution()
+    for s in range(10):
+        images, boxs, label, input_rpn_match, input_rpn_bbox = q.get()
+        predict(images)
+
 
 if __name__ == '__main__':
-    eager_run()
+    detect()
