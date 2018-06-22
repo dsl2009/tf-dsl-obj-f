@@ -3,7 +3,7 @@ import tensorflow as tf
 from tensorflow.contrib import slim
 from config.cfg import config_instace as cfg
 import utils
-#from data_set.data_loader import q
+from data_set.data_loader import q
 import cv2
 import numpy as np
 from nets import inception_v2
@@ -11,19 +11,39 @@ import visual
 from loss import losses
 import glob
 import time
+
 #tf.enable_eager_execution()
 def model(img):
     with slim.arg_scope(inception_v2.inception_v2_arg_scope()):
-        logits, end_point = inception_v2.inception_v2_base(img)
+        with slim.arg_scope([slim.batch_norm],is_training=True):
+            with slim.arg_scope([slim.conv2d], trainable=True):
+                logits, end_point = inception_v2.inception_v2_base(img)
 
-        Mixed_3c = end_point['Mixed_3c']
-        Mixed_4e = end_point['Mixed_4e']
-        Mixed_5c = end_point['Mixed_5c']
-        #vbs = slim.get_trainable_variables()
-        vbs = None
-        c1 = slim.conv2d(Mixed_3c, 512, kernel_size=1, activation_fn=None)
-        c2 = slim.conv2d(Mixed_4e, 512, kernel_size=1, activation_fn=None)
-        c3 = slim.conv2d(Mixed_5c, 512, kernel_size=1, activation_fn=None)
+    Mixed_3c = end_point['Mixed_3c']
+    Mixed_4e = end_point['Mixed_4e']
+    Mixed_5c = end_point['Mixed_5c']
+    vbs = slim.get_variables_to_restore()
+
+    #vbs = None
+    c1_1 = slim.conv2d(Mixed_3c, 512, kernel_size=3,stride=2, activation_fn=tf.nn.relu)
+    c1_2 = slim.conv2d(Mixed_3c, 512, kernel_size=1, stride=2, activation_fn=tf.nn.relu)
+    c1_3 = slim.conv2d(Mixed_3c, 512, kernel_size=5, stride=2, activation_fn=tf.nn.relu)
+    c1 = tf.concat([c1_1, c1_2, c1_3], axis=3)
+    c1 = slim.conv2d(c1, 256, kernel_size=1, activation_fn=None)
+
+
+
+    c2_1 = slim.conv2d(Mixed_4e, 256, kernel_size=3, activation_fn=tf.nn.relu)
+    c2_2 = slim.conv2d(Mixed_4e, 256, kernel_size=1, activation_fn=tf.nn.relu)
+    c2_3 = slim.conv2d(Mixed_4e, 256, kernel_size=5, activation_fn=tf.nn.relu)
+    c2 = tf.concat([c2_1, c2_2, c2_3], axis=3)
+    c2 = slim.conv2d(c2, 256, kernel_size=1, activation_fn=None)
+
+    c3_1 = slim.conv2d(Mixed_5c, 256, kernel_size=3, activation_fn=tf.nn.relu)
+    c3_2 = slim.conv2d(Mixed_5c, 256, kernel_size=1, activation_fn=tf.nn.relu)
+    c3_3 = slim.conv2d(Mixed_5c, 256, kernel_size=5, activation_fn=tf.nn.relu)
+    c3 = tf.concat([c3_1,c3_2,c3_3],axis=3)
+    c3 = slim.conv2d(c3, 256, kernel_size=1, activation_fn=None)
 
     return c1,c2,c3,vbs
 
@@ -142,15 +162,15 @@ def detection_target(input_proposals, input_gt_class_ids, input_gt_boxes):
     return tf.stack(roiss,axis=0),tf.stack(roi_gt_class_idss,axis=0),tf.stack(deltass,axis=0)
 
 def fpn_classifier_graph(rois, feature_maps):
+    x = utils.roi_align(rois, feature_maps, cfg)
 
-    x = utils.roi_align(rois,feature_maps,cfg)
-
-    x = slim.conv2d(x,1024,kernel_size=cfg.pool_shape,padding='VALID',activation_fn=tf.nn.relu)
-    x = slim.conv2d(x, 1024, kernel_size=1,  activation_fn=tf.nn.relu)
-    mrcnn_class_logits = slim.fully_connected(x,cfg.num_class)
+    x = slim.conv2d(x,512,kernel_size=cfg.pool_shape,padding='VALID')
+    x = slim.conv2d(x, 512, kernel_size=1)
+    x1 = slim.dropout(x,keep_prob=1.0)
+    mrcnn_class_logits = slim.fully_connected(x1,cfg.num_class)
     mrcnn_probs = slim.softmax(mrcnn_class_logits)
-    x = slim.fully_connected(x,cfg.num_class*4)
 
+    x = slim.fully_connected(x,cfg.num_class*4)
     mrcnn_bbox = tf.reshape(x,shape=(-1,cfg.num_class,4))
 
     return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
@@ -176,45 +196,6 @@ def predict(images,window):
 
     detections = utils.refine_detections_graph(rpn_rois,mrcnn_class, mrcnn_bbox,window,cfg)
     return detections
-
-
-def detect():
-
-    ig = tf.placeholder(shape=(1, 512, 512, 3), dtype=tf.float32)
-    wind = tf.placeholder(shape=(4,1),dtype=tf.float32)
-    detections = predict(images=ig,window=wind)
-    saver = tf.train.Saver()
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-        saver.restore(sess, '/home/dsl/all_check/face_detect/faster-rcnn/model.ckpt-38201')
-        for ip in glob.glob('/media/dsl/20d6b919-92e1-4489-b2be-a092290668e4/VOCdevkit/VOCdevkit/VOC2012/JPEGImages/*.jpg'):
-            print(ip)
-            img = cv2.imread(ip)
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            org, window, scale, padding, crop = utils.resize_image(img, min_dim=512, max_dim=512)
-            window = np.asarray(window)/cfg.image_size[0]*1.0
-            print(window)
-            window = np.reshape(window,[4,1])
-            print(window)
-
-
-            img = (org/ 255.0-0.5)*2
-            img = np.expand_dims(img, axis=0)
-            t = time.time()
-            detects = sess.run([detections],feed_dict={ig:img,wind:window})
-            print(time.time()-t)
-            arr = detects[0]
-            ix = np.where(np.sum(arr,axis=1)>0)
-            box = arr[ix]
-            boxes = box[:,0:4]
-            label = box[:,4]
-            score = box[:,5]
-            visual.display_instances_title(org, np.asarray(boxes) * 512, class_ids=label,
-                                           class_names=cfg.VOC_CLASSES, scores=score)
-
-
-
-
 
 def loss(gt_boxs, images, input_rpn_bbox, input_rpn_match, label):
     c1, c2, c3, vbs= model(images)
@@ -251,6 +232,46 @@ def loss(gt_boxs, images, input_rpn_bbox, input_rpn_match, label):
     train_tensors = tf.identity(total_loss, 'ss')
     return train_tensors, sum_op, vbs
 
+def detect():
+
+    ig = tf.placeholder(shape=(1, 512, 512, 3), dtype=tf.float32)
+    wind = tf.placeholder(shape=(4,1),dtype=tf.float32)
+    detections = predict(images=ig,window=wind)
+    saver = tf.train.Saver()
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        saver.restore(sess, '/home/dsl/all_check/face_detect/add_droup_nine/model.ckpt-14067')
+        for ip in glob.glob('/media/dsl/20d6b919-92e1-4489-b2be-a092290668e4/VOCdevkit/VOCdevkit/VOC2012/JPEGImages/*.jpg'):
+            print(ip)
+            img = cv2.imread(ip)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            org, window, scale, padding, crop = utils.resize_image(img, min_dim=512, max_dim=512)
+            window = np.asarray(window)/cfg.image_size[0]*1.0
+            print(window)
+            window = np.reshape(window,[4,1])
+            print(window)
+
+
+            img = (org/ 255.0-0.5)*2
+            img = np.expand_dims(img, axis=0)
+            t = time.time()
+            detects = sess.run([detections],feed_dict={ig:img,wind:window})
+            print(time.time()-t)
+            arr = detects[0]
+            print(arr)
+            ix = np.where(np.sum(arr,axis=1)>0)
+            box = arr[ix]
+            boxes = box[:,0:4]
+            label = box[:,4]
+            score = box[:,5]
+            visual.display_instances_title(org, np.asarray(boxes) * 512, class_ids=label,
+                                           class_names=cfg.VOC_CLASSES, scores=score)
+
+
+
+
+
+
 def run():
     pl_images = tf.placeholder(shape=[cfg.batch_size, cfg.image_size[0], cfg.image_size[1], 3], dtype=tf.float32)
     pl_gt_boxs = tf.placeholder(shape=[cfg.batch_size, 50, 4], dtype=tf.float32)
@@ -269,7 +290,7 @@ def run():
     def restore(sess):
         saver.restore(sess, '/home/dsl/all_check/inception_v2.ckpt')
 
-    sv = tf.train.Supervisor(logdir='/home/dsl/all_check/face_detect/faster-rcnn', summary_op=None, init_fn=restore)
+    sv = tf.train.Supervisor(logdir='/home/dsl/all_check/face_detect/add_droup1', summary_op=None, init_fn=restore)
 
     with sv.managed_session() as sess:
         for step in range(1000000000):
@@ -281,9 +302,10 @@ def run():
             feed_dict = {pl_images: images, pl_gt_boxs: gt_boxs,
                          pl_label: label,pl_input_rpn_bbox:input_rpn_bbox,
                          pl_input_rpn_match:input_rpn_match}
-
+            t = time.time()
             ls = sess.run(train_op, feed_dict=feed_dict)
             if step % 10 == 0:
+                print(time.time()-t)
                 summaries = sess.run(sum_op, feed_dict=feed_dict)
                 sv.summary_computed(sess, summaries)
                 print(ls)
@@ -298,7 +320,7 @@ def eager_run():
         images, boxs, label, input_rpn_match, input_rpn_bbox = q.get()
         print(input_rpn_bbox.shape)
         gt_boxs = utils.norm_boxes(boxes=boxs,shape=cfg.image_size)
-        c1,c2,c3 = model(images)
+        c1,c2,c3,v = model(images)
         fp = [c1,c2,c3]
         rpn_c_l = []
         r_p = []
@@ -341,4 +363,4 @@ def eager_val():
 
 
 if __name__ == '__main__':
-    detect()
+    run()

@@ -45,3 +45,13 @@ def gen_multi_anchors(scales, ratios, shape, feature_stride, anchor_stride=1):
 
     return np.vstack(anchors)
 
+def gen_nine_anchors(scales, ratios, shape, feature_stride, anchor_stride=1):
+    anchors = []
+    for s in range(len(scales)):
+        scs = [scales[s]/2,scales[s]*3/4,scales[s]]
+        print(scs)
+
+        an = generate_anchors(scs,ratios,shape[s],feature_stride[s],anchor_stride=1)
+        anchors.append(an)
+
+    return np.vstack(anchors)
