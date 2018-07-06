@@ -19,35 +19,21 @@ def model(img):
             with slim.arg_scope([slim.conv2d], trainable=True):
                 logits, end_point = inception_v2.inception_v2_base(img)
 
-    Mixed_3c = end_point['Mixed_3c']
-    Mixed_4e = end_point['Mixed_4e']
-    Mixed_5c = end_point['Mixed_5c']
+    c1 = end_point['Mixed_3c']
+    c2 = end_point['Mixed_4e']
+    c3 = end_point['Mixed_5c']
     vbs = slim.get_variables_to_restore()
 
-    #vbs = None
-    c1_1 = slim.conv2d(Mixed_3c, 512, kernel_size=3,stride=2, activation_fn=tf.nn.relu)
-    c1_2 = slim.conv2d(Mixed_3c, 512, kernel_size=1, stride=2, activation_fn=tf.nn.relu)
-    c1_3 = slim.conv2d(Mixed_3c, 512, kernel_size=5, stride=2, activation_fn=tf.nn.relu)
-    c1 = tf.concat([c1_1, c1_2, c1_3], axis=3)
-    c1 = slim.conv2d(c1, 256, kernel_size=1, activation_fn=None)
+    c3 = slim.conv2d(c3, 256, 1, 1, activation_fn=None)
 
+    c2 = slim.conv2d(c2, 256, 1, 1, activation_fn=None) + tf.image.resize_bilinear(c3, size=tf.shape(c2)[1:3])
 
+    c1 = slim.conv2d(c1, 256, 1, 1, activation_fn=None) + tf.image.resize_bilinear(c2, size=tf.shape(c1)[1:3])
 
-    c2_1 = slim.conv2d(Mixed_4e, 256, kernel_size=3, activation_fn=tf.nn.relu)
-    c2_2 = slim.conv2d(Mixed_4e, 256, kernel_size=1, activation_fn=tf.nn.relu)
-    c2_3 = slim.conv2d(Mixed_4e, 256, kernel_size=5, activation_fn=tf.nn.relu)
-    c2 = tf.concat([c2_1, c2_2, c2_3], axis=3)
-    c2 = slim.conv2d(c2, 256, kernel_size=1, activation_fn=None)
-
-    c3_1 = slim.conv2d(Mixed_5c, 256, kernel_size=3, activation_fn=tf.nn.relu)
-    c3_2 = slim.conv2d(Mixed_5c, 256, kernel_size=1, activation_fn=tf.nn.relu)
-    c3_3 = slim.conv2d(Mixed_5c, 256, kernel_size=5, activation_fn=tf.nn.relu)
-    c3 = tf.concat([c3_1,c3_2,c3_3],axis=3)
-    c3 = slim.conv2d(c3, 256, kernel_size=1, activation_fn=None)
 
     return c1,c2,c3,vbs
 
-def rpn_graph(feature_map,anchors_per_location=3):
+def rpn_graph(feature_map,anchors_per_location=9):
     shared = slim.conv2d(feature_map,512,3,activation_fn=slim.nn.relu)
     x = slim.conv2d(shared,2 * anchors_per_location,kernel_size=1,padding='VALID',activation_fn=None)
     rpn_class_logits = tf.reshape(x,shape=[tf.shape(x)[0],-1,2])
@@ -240,16 +226,16 @@ def detect():
     saver = tf.train.Saver()
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-        saver.restore(sess, '/home/dsl/all_check/face_detect/add_droup_nine/model.ckpt-14067')
+        saver.restore(sess, '/home/dsl/all_check/face_detect/nn_faster_rcnn_sec/model.ckpt-32467')
         for ip in glob.glob('/media/dsl/20d6b919-92e1-4489-b2be-a092290668e4/VOCdevkit/VOCdevkit/VOC2012/JPEGImages/*.jpg'):
             print(ip)
             img = cv2.imread(ip)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             org, window, scale, padding, crop = utils.resize_image(img, min_dim=512, max_dim=512)
             window = np.asarray(window)/cfg.image_size[0]*1.0
-            print(window)
+
             window = np.reshape(window,[4,1])
-            print(window)
+
 
 
             img = (org/ 255.0-0.5)*2
@@ -258,7 +244,7 @@ def detect():
             detects = sess.run([detections],feed_dict={ig:img,wind:window})
             print(time.time()-t)
             arr = detects[0]
-            print(arr)
+
             ix = np.where(np.sum(arr,axis=1)>0)
             box = arr[ix]
             boxes = box[:,0:4]
@@ -288,9 +274,9 @@ def run():
     saver = tf.train.Saver(vbs)
 
     def restore(sess):
-        saver.restore(sess, '/home/dsl/all_check/inception_v2.ckpt')
+        saver.restore(sess, '/home/dsl/all_check/face_detect/nn_faster_rcnn/model.ckpt-86737')
 
-    sv = tf.train.Supervisor(logdir='/home/dsl/all_check/face_detect/add_droup1', summary_op=None, init_fn=restore)
+    sv = tf.train.Supervisor(logdir='/home/dsl/all_check/face_detect/nn_faster_rcnn_sec', summary_op=None, init_fn=restore)
 
     with sv.managed_session() as sess:
         for step in range(1000000000):
@@ -363,4 +349,4 @@ def eager_val():
 
 
 if __name__ == '__main__':
-    run()
+    detect()
